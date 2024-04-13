@@ -13,10 +13,22 @@ from queue import Queue
 from time import sleep
 from sys import platform
 
+import tkinter as tk
+
+# root = tk.Tk()
+# root.attributes("-transparentcolor", "white")  # Set white color as transparent
+# root.config(bg='white')  # Set background color to white (will be transparent)
+# root.overrideredirect(True)  # Remove window decorations
+
+# label = tk.Label(root, text="Hello, transparent world!", font=("Arial", 24))
+# label.pack()
+
+# root.mainloop()
+
 def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("--model", default="medium", help="Model to use",
-            choices=["tiny", "base", "small", "medium", "large", "tiny.en", "base.en", "small.en", "medium.en"])
+            choices=["tiny", "base", "small", "medium", "large", "tiny.en", "base.en", "small.en", "medium.en", "large-v3"])
   parser.add_argument("--input", default=None,
             help="Default input source.", type=str)
   parser.add_argument("--language", default=None,
@@ -90,7 +102,7 @@ def main():
     audio: An AudioData containing the recorded bytes.
     """
     # Grab the raw bytes and push it into the thread safe queue.
-    data = audio.get_raw_data(convert_rate=sample_rate, convert_width=2)
+    data = audio.get_raw_data()
     data_queue.put(data)
 
   # Create a background thread that will pass us raw audio bytes.

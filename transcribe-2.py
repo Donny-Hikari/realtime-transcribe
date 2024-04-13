@@ -12,7 +12,7 @@ from faster_whisper import WhisperModel
 def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("--model", default="medium", help="Model to use",
-            choices=["tiny", "base", "small", "medium", "large", "tiny.en", "base.en", "small.en", "medium.en"])
+            choices=["tiny", "base", "small", "medium", "large", "tiny.en", "base.en", "small.en", "medium.en", "large-v3"])
   parser.add_argument("--input", default=None,
             help="Default input source.", type=str)
   parser.add_argument("--language", default=None,
@@ -57,10 +57,10 @@ def main():
   sample_size = audio.get_sample_size(audio_format)
   audio_chunk = 1024  # Number of frames per buffer
   model = args.model
-  compute_device = "cuda" if torch.cuda.is_available() else "cpu"
+  compute_device = "cpu"
   compute_type = "float16" if compute_device == "cuda" else "float32"
 
-  audio_model = WhisperModel("large-v3", device=compute_device, compute_type=compute_type)
+  audio_model = WhisperModel(model, device=compute_device, compute_type=compute_type)
   # audio_model = whisper.load_model(model, device=compute_device)
 
   audio_queue = Queue()
@@ -115,10 +115,11 @@ def main():
         vad_filter=True,
         language=language,
       )
-      text = ''.join(map(lambda x: x['text'], segments)).strip()
+      segments = list(segments)
+      text = ''.join(map(lambda x: x.text, segments)).strip()
 
       for seg in segments:
-        print(seg['start'], seg['end'], seg['text'])
+        print(seg.start, seg.end, seg.text)
       print(text)
       print(len(acc_data)/sample_rate/sample_size)
     except KeyboardInterrupt:
