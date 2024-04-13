@@ -7,6 +7,7 @@ import threading
 from queue import Queue
 import argparse
 import time
+from faster_whisper import WhisperModel
 
 def parse_args():
   parser = argparse.ArgumentParser()
@@ -57,8 +58,10 @@ def main():
   audio_chunk = 1024  # Number of frames per buffer
   model = args.model
   compute_device = "cuda" if torch.cuda.is_available() else "cpu"
+  compute_type = "float16" if compute_device == "cuda" else "float32"
 
-  audio_model = whisper.load_model(model, device=compute_device)
+  audio_model = WhisperModel("large-v3", device=compute_device, compute_type=compute_type)
+  # audio_model = whisper.load_model(model, device=compute_device)
 
   audio_queue = Queue()
   stop_event = threading.Event()
@@ -87,7 +90,8 @@ def main():
   print("Recording...")
 
   # Record audio data
-  acc_data = torch.zeros((0,), dtype=torch.float32, device=compute_device)
+  # acc_data = torch.zeros((0,), dtype=torch.float32, device=compute_device)
+  acc_data = np.zeros((0,), dtype=np.float32)
   while True:
     try:
       audio_queue.mutex.acquire()
@@ -100,19 +104,20 @@ def main():
         continue
 
       audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-      audio_torch = torch.from_numpy(audio_np).to(device=compute_device)
+      # audio_torch = torch.from_numpy(audio_np).to(device=compute_device)
 
-      acc_data = torch.hstack([acc_data, audio_torch])
+      # acc_data = torch.hstack([acc_data, audio_torch])
+      acc_data = np.hstack([acc_data, audio_np])
 
       # Read the transcription.
-      result = audio_model.transcribe(
+      segments, info = audio_model.transcribe(
         acc_data,
-        fp16=(compute_device == "cuda"),
+        vad_filter=True,
         language=language,
       )
-      text = result['text'].strip()
+      text = ''.join(map(lambda x: x['text'], segments)).strip()
 
-      for seg in result['segments']:
+      for seg in segments:
         print(seg['start'], seg['end'], seg['text'])
       print(text)
       print(len(acc_data)/sample_rate/sample_size)
