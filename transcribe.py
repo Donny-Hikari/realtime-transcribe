@@ -134,7 +134,7 @@ class AudioInputProvider:
   def stop_record(self):
     raise NotImplementedError
 
-  def is_new_phrase(self, acc_data, new_data):
+  def phrase_cut_off(self, acc_data, new_data):
     raise NotImplementedError
 
 class SpeechRecognitionAudioProvider(AudioInputProvider):
@@ -177,7 +177,7 @@ class SpeechRecognitionAudioProvider(AudioInputProvider):
 
     del self.phrase_time
 
-  def is_new_phrase(self, acc_data, new_data):
+  def phrase_cut_off(self, acc_data, new_data):
     now = datetime.now()
 
     # If enough time has passed between recordings, consider the phrase complete.
@@ -185,9 +185,9 @@ class SpeechRecognitionAudioProvider(AudioInputProvider):
     if self.phrase_time and now - self.phrase_time > timedelta(seconds=self.phrase_timeout):
       # This is the last time we received new audio data from the queue.
       self.phrase_time = now # should set after the transcription is done
-      return True
+      return len(acc_data)
     else:
-      return False
+      return 0
 
   def record_callback(self, _, audio: sr.AudioData) -> None:
     """
@@ -231,8 +231,11 @@ class PyAudioProvider(AudioInputProvider):
     self.stop_event.set()
     self.record_thread.join()
 
-  def is_new_phrase(self, acc_data, new_data):
-    return len(acc_data) + len(new_data) > self.sample_rate*self.sample_size*10240
+  def phrase_cut_off(self, acc_data, new_data):
+    if len(acc_data) + len(new_data) > self.sample_rate*self.sample_size*60:
+      return len(acc_data) // 2
+    else:
+      return 0
 
   def _record_audio(self):
     # Open audio stream with the selected input device
@@ -341,9 +344,8 @@ class Transcriber():
           sleep(0.1)
           continue
 
-        phrase_complete = self.input_provider.is_new_phrase(acc_audio_data, audio_data)
-        if phrase_complete:
-          acc_audio_data = torch.zeros((0,), dtype=torch.float32, device=self.compute_device)
+        phrase_cut_off = self.input_provider.phrase_cut_off(acc_audio_data, audio_data)
+        acc_audio_data = acc_audio_data[phrase_cut_off:]
 
         # Convert in-ram buffer to something the model can use directly without needing a temp file.
         # Convert data from 16 bit wide integers to floating point with a width of 32 bits.
@@ -364,7 +366,7 @@ class Transcriber():
 
         # If we detected a pause between recordings, add a new item to our transcription.
         # Otherwise edit the existing one.
-        if phrase_complete:
+        if phrase_cut_off > 0:
           transcription.append(text)
         else:
           transcription[-1] = text
