@@ -13,28 +13,33 @@ from queue import Queue
 from time import sleep
 from sys import platform
 
-
-def main():
+def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("--model", default="medium", help="Model to use",
             choices=["tiny", "base", "small", "medium", "large", "tiny.en", "base.en", "small.en", "medium.en"])
+  parser.add_argument("--input", default=None,
+            help="Default input source.", type=str)
+  parser.add_argument("--language", default=None,
+            help="Default language.", type=str)
+
   parser.add_argument("--energy_threshold", default=1000,
             help="Energy level for mic to detect.", type=int)
-  parser.add_argument("--record_timeout", default=2,
+  parser.add_argument("--record_timeout", default=1,
             help="How real time the recording is in seconds.", type=float)
   parser.add_argument("--phrase_timeout", default=3,
             help="How much empty space between recordings before we "
                "consider it a new line in the transcription.", type=float)
-  if 'linux' in platform:
-    parser.add_argument("--default_microphone", default='pulse',
-              help="Default microphone name for SpeechRecognition. "
-                 "Run this with 'list' to view available Microphones.", type=str)
   args = parser.parse_args()
+  return args
 
-  language = 'ja'
+def main():
+  args = parse_args()
+
+  language = args.language
   sample_rate = 44100
   # The last time a recording was retrieved from the queue.
   phrase_time = None
+  compute_device = "cuda" if torch.cuda.is_available() else "cpu"
   # Thread safe Queue for passing data from the threaded recording callback.
   data_queue = Queue()
   # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
@@ -43,25 +48,29 @@ def main():
   # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
   recorder.dynamic_energy_threshold = False
 
-  # Important for linux users.
-  # Prevents permanent application hang and crash by using the wrong Microphone
-  if 'linux' in platform:
-    mic_name = args.default_microphone
-    if not mic_name or mic_name == 'list':
-      print("Available microphone devices are: ")
-      for index, name in enumerate(sr.Microphone.list_microphone_names()):
-        print(f"Microphone with name \"{name}\" found")
-      return
-    else:
-      for index, name in enumerate(sr.Microphone.list_microphone_names()):
-        if mic_name in name:
-          source = sr.Microphone(sample_rate=sample_rate, device_index=index)
-          break
-  else:
-    source = sr.Microphone(sample_rate=sample_rate)
+  device_index = None
+  if args.input is not None:
+    for idx, name in enumerate(sr.Microphone.list_microphone_names()):
+      if name == args.input:
+        device_index = idx
+        break
 
-  compute_device = "cuda" if torch.cuda.is_available() else "cpu"
-  # compute_device = "cpu"
+  if device_index is None:
+    if args.input is not None:
+      print(f'Invalid input device "{args.input}"')
+
+    # Print the list of available audio devices
+    print("Available input devices:")
+    for idx, name in enumerate(sr.Microphone.list_microphone_names()):
+      print(f"{idx}. {name}")
+
+    if args.input is None:
+      # Choose the index of the desired input device
+      device_index = int(input("Enter the index of the input device you want to use: "))
+    else:
+      return
+
+  source = sr.Microphone(sample_rate=sample_rate, device_index=device_index)
 
   # Load / Download model
   model = args.model
@@ -91,64 +100,66 @@ def main():
   # Cue the user that we're ready to go.
   print("Model loaded.\n")
 
-  acc_audio_data = b''
+  acc_audio_data = torch.zeros((0,), dtype=torch.float32, device=compute_device)
   while True:
     try:
       now = datetime.now()
       # Pull raw recorded audio from the queue.
-      if not data_queue.empty():
-        phrase_complete = False
-        # If enough time has passed between recordings, consider the phrase complete.
-        # Clear the current working audio buffer to start over with the new data.
-        if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
-          phrase_complete = True
-          acc_audio_data = b''
+      phrase_complete = False
+      # If enough time has passed between recordings, consider the phrase complete.
+      # Clear the current working audio buffer to start over with the new data.
+      if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
+        phrase_complete = True
+        acc_audio_data = torch.zeros((0,), dtype=torch.float32, device=compute_device)
 
-        # Combine audio data from queue
-        audio_data = b''.join(data_queue.queue)
-        data_queue.queue.clear()
+      data_queue.mutex.acquire()
+      audio_data = b''.join(data_queue.queue)
+      data_queue.queue.clear()
+      data_queue.mutex.release()
 
-        acc_audio_data += audio_data
+      if len(audio_data) == 0:
+        sleep(0.1)
+        continue
 
-        # Convert in-ram buffer to something the model can use directly without needing a temp file.
-        # Convert data from 16 bit wide integers to floating point with a width of 32 bits.
-        # Clamp the audio stream frequency to a PCM wavelength compatible default of 32768hz max.
-        audio_np = np.frombuffer(acc_audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-        audio_torch = torch.from_numpy(audio_np).to(device=compute_device)
+      # Convert in-ram buffer to something the model can use directly without needing a temp file.
+      # Convert data from 16 bit wide integers to floating point with a width of 32 bits.
+      # Clamp the audio stream frequency to a PCM wavelength compatible default of 32768hz max.
+      audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+      audio_torch = torch.from_numpy(audio_np).to(device=compute_device)
 
-        # Read the transcription.
-        result = audio_model.transcribe(
-          audio_torch,
-          fp16=(compute_device == "cuda"),
-          language=language,
-        )
-        text = result['text'].strip()
+      acc_audio_data = torch.hstack([acc_audio_data, audio_torch])
 
-        # If we detected a pause between recordings, add a new item to our transcription.
-        # Otherwise edit the existing one.
-        if phrase_complete:
-          transcription.append(text)
-        else:
-          transcription[-1] = text
+      # Read the transcription.
+      result = audio_model.transcribe(
+        acc_audio_data,
+        fp16=(compute_device == "cuda"),
+        condition_on_previous_text=False,
+        language=language,
+      )
+      text = result['text'].strip()
 
-        # Clear the console to reprint the updated transcription.
-        os.system('cls' if os.name=='nt' else 'clear')
-        for seg in result['segments']:
-          print(seg['start'], '->', seg['end'], seg['text'])
-        # print(result)
-        print(len(acc_audio_data))
-        print(len(acc_audio_data)/source.SAMPLE_RATE/source.SAMPLE_WIDTH)
-
-        for line in transcription:
-          print(line)
-        # Flush stdout.
-        print('', end='', flush=True)
-
-        # This is the last time we received new audio data from the queue.
-        phrase_time = now
+      # If we detected a pause between recordings, add a new item to our transcription.
+      # Otherwise edit the existing one.
+      if phrase_complete:
+        transcription.append(text)
       else:
-        # Infinite loops are bad for processors, must sleep.
-        sleep(0.25)
+        transcription[-1] = text
+
+      # Clear the console to reprint the updated transcription.
+      os.system('cls' if os.name=='nt' else 'clear')
+      for seg in result['segments']:
+        print(seg['start'], '->', seg['end'], seg['text'])
+      # print(result)
+      print(len(acc_audio_data))
+      print(len(acc_audio_data)/source.SAMPLE_RATE/source.SAMPLE_WIDTH)
+
+      for line in transcription:
+        print(line)
+      # Flush stdout.
+      print('', end='', flush=True)
+
+      # This is the last time we received new audio data from the queue.
+      phrase_time = now
     except KeyboardInterrupt:
       break
 
