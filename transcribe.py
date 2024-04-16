@@ -375,25 +375,22 @@ class Transcriber():
           condition_on_previous_text=False,
           language=self.language,
         )
-        text = result['text'].strip()
+        wrapped_text = '\n'.join(map(lambda x: x['text'], result['segments']))
 
         # If we detected a pause between recordings, add a new item to our transcription.
         # Otherwise edit the existing one.
         if phrase_cut_off > 0:
-          transcription.append(text)
+          transcription.append(wrapped_text)
         else:
-          transcription[-1] = text
+          transcription[-1] = wrapped_text
 
         if self.hud_window is not None:
-          self.hud_window.update_text('\n'.join(transcription[-2:]))
+          self.hud_window.update_text(wrapped_text)
 
         # Clear the console to reprint the updated transcription.
         os.system('cls' if os.name=='nt' else 'clear')
         for seg in result['segments']:
           print(seg['start'], '->', seg['end'], seg['text'])
-        # print(result)
-        # print(len(acc_audio_data))
-        # print(len(acc_audio_data)/self.source.SAMPLE_RATE/self.source.SAMPLE_WIDTH)
 
         for line in transcription:
           print(line)
