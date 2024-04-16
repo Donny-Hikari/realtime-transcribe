@@ -16,9 +16,9 @@ from queue import Queue
 from time import sleep
 from sys import platform
 
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QHBoxLayout, QLabel
-from PyQt5.QtGui import QFont, QFontMetrics
-from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QSize
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QHBoxLayout, QLabel, QTextEdit
+from PyQt5.QtGui import QFont, QFontMetrics, QCursor
+from PyQt5.QtCore import QChildEvent, Qt, QTimer, QPoint, QRect, QSize
 
 def parse_args():
   parser = argparse.ArgumentParser()
@@ -46,8 +46,33 @@ def parse_args():
   args = parser.parse_args()
   return args
 
+
+class HUDText(QTextEdit):
+  def __init__(self, font_size):
+    super().__init__()
+
+    self.setReadOnly(True)
+    self.setAlignment(Qt.AlignLeft|Qt.AlignVCenter)
+    self.setStyleSheet("background-color: rgba(0,0,0,0.5); color: white")
+    self.setLineWrapMode(QTextEdit.WidgetWidth)
+    font = QFont()
+    font.setPointSize(font_size)
+    self.setFont(font)
+    self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+
+  def mousePressEvent(self, event):
+    event.ignore()
+
+  def mouseMoveEvent(self, event):
+    event.ignore()
+
+  def mouseReleaseEvent(self, event):
+    event.ignore()
+
 class HUD(QMainWindow):
   max_width_percentage = 0.4
+  max_height_percentage = 0.16
   max_lines = 4
   padding = 10
   extra_padding = 30
@@ -58,7 +83,7 @@ class HUD(QMainWindow):
     self.text = "Transcription started"
 
     # Set window attributes
-    self.setWindowFlags(Qt.CustomizeWindowHint|Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+    self.setWindowFlags(Qt.CustomizeWindowHint|Qt.FramelessWindowHint|Qt.WindowStaysOnTopHint|Qt.WindowDoesNotAcceptFocus)
     self.setAttribute(Qt.WA_TranslucentBackground)
 
     # Set window opacity
@@ -68,24 +93,19 @@ class HUD(QMainWindow):
     central_widget = QWidget()
     layout = QHBoxLayout(central_widget)
 
-    label = QLabel(self.text)
-    label.setAlignment(Qt.AlignLeft|Qt.AlignVCenter)
-    label.setStyleSheet("background-color: rgba(0,0,0,0.5); color: white")
-    font = QFont()
-    font.setPointSize(font_size)  # Set font size to 24
-    label.setFont(font)
-    label.setWordWrap(True)
-    self.label = label
-
-    layout.addWidget(label)
-
-    # Limit window size to 60% of screen width
-    screen_width = QApplication.desktop().screenGeometry().width()
-    self.max_width = int(self.max_width_percentage * screen_width)
-    self.setFixedWidth(self.max_width)
+    self.text_widget = HUDText(font_size)
+    self.text_widget.setParent(central_widget)
+    layout.addWidget(self.text_widget)
 
     self.setStyleSheet(f"padding: {self.padding}px;")
     self.setCentralWidget(central_widget)
+
+    # Limit window size to 60% of screen width
+    screen_geometry = QApplication.desktop().screenGeometry()
+    max_width = int(self.max_width_percentage * screen_geometry.width())
+    max_height = int(self.max_height_percentage * screen_geometry.height())
+    self.setFixedWidth(max_width)
+    self.setFixedHeight(max_height) # sadly qt is unable to measure text height properly, so we have to set height ratio to screen and leave it ugly
 
     # Start updating the text periodically
     self.update_text_timer = QTimer(self)
@@ -110,16 +130,10 @@ class HUD(QMainWindow):
       self.old_pos = None
 
   def updateTextWidget(self):
-    self.label.setText(self.text)
+    self.text_widget.setText(self.text)
 
-    # Set label maximum height to show only last 3 lines wrapped
-    fm = self.label.fontMetrics()
-    label_rect = fm.boundingRect(QRect(0, 0, self.max_width-self.padding*2, 1000), Qt.TextWordWrap|Qt.AlignLeft|Qt.AlignVCenter, self.text)
-    last_3_lines_height = self.max_lines * fm.lineSpacing()
-    max_label_height = min(label_rect.height(), last_3_lines_height) + self.padding*2 + self.extra_padding
-    self.setFixedHeight(max_label_height)
-    self.label.resize(QSize(label_rect.width(), label_rect.height()))
-    self.label.move(0, max_label_height - label_rect.height())
+    vertical_scrollbar = self.text_widget.verticalScrollBar()
+    vertical_scrollbar.setValue(vertical_scrollbar.maximum())
 
   def update_text(self, text):
     self.text = text
