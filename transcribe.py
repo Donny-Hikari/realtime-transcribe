@@ -10,6 +10,7 @@ import torch
 import threading
 import pyaudio
 import signal
+from faster_whisper import WhisperModel
 
 from datetime import datetime, timedelta
 from queue import Queue
@@ -29,6 +30,8 @@ def parse_args():
   parser.add_argument("--input-provider", default="pyaudio",
             choices=["pyaudio", "speech-recognition"],
             help="Default input provider.", type=str)
+  parser.add_argument("--no-faster-whisper", action='store_true', default=False,
+            help="Disable faster whisper.")
 
   parser.add_argument("--language", default=None,
             help="Default language.", type=str)
@@ -39,6 +42,8 @@ def parse_args():
             help="Disable fp16.")
   parser.add_argument("--stablize-turns", default=5,
             help="Turns to stablize result (before discarding audio record). 0 means never.", type=int)
+  parser.add_argument("--max-duration", default=60,
+            help="Max duration of audio record to keep.", type=int)
   parser.add_argument("--keep-transcriptions", action='store_true', default=False,
             help="Keep all previous transcriptions")
 
@@ -46,7 +51,7 @@ def parse_args():
             help="Font size of HUD.", type=int)
 
   # args for input provider 'speech-recognition'
-  parser.add_argument("--energy_threshold", default=500,
+  parser.add_argument("--energy_threshold", default=200,
             help="Energy level for mic to detect.", type=int)
   parser.add_argument("--record_timeout", default=1,
             help="How real time the recording is in seconds.", type=float)
@@ -299,7 +304,6 @@ class Transcriber():
   min_duration = 30 # seconds
   n_context = 5
   max_transcription_history = 100
-  force_discard = 60 # seconds
 
   def __init__(self, args):
     self.args = args
@@ -323,7 +327,10 @@ class Transcriber():
     self.init_input_device(args)
 
     # Load / Download model
-    self.audio_model = whisper.load_model(self.model_name, device=self.compute_device)
+    if self.args.no_faster_whisper:
+      self.audio_model = whisper.load_model(self.model_name, device=self.compute_device)
+    else:
+      self.audio_model = WhisperModel(self.model_name, device=self.compute_device)
 
     # Cue the user that we're ready to go.
     print("Model loaded.\n")
@@ -382,7 +389,10 @@ class Transcriber():
 
     self.input_provider.start_record()
 
-    acc_audio_data = torch.zeros((0,), dtype=torch.float32, device=self.compute_device)
+    if self.args.no_faster_whisper:
+      acc_audio_data = torch.zeros((0,), dtype=torch.float32, device=self.compute_device)
+    else:
+      acc_audio_data = np.zeros((0,), dtype=np.float32)
     while not self.stop_event.is_set():
       try:
         self.data_queue.mutex.acquire()
@@ -403,23 +413,41 @@ class Transcriber():
         # Convert data from 16 bit wide integers to floating point with a width of 32 bits.
         # Clamp the audio stream frequency to a PCM wavelength compatible default of 32768hz max.
         audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-        audio_torch = torch.from_numpy(audio_np).to(device=self.compute_device)
+        if self.args.no_faster_whisper:
+          audio_torch = torch.from_numpy(audio_np).to(device=self.compute_device)
+          acc_audio_data = torch.hstack([acc_audio_data, audio_torch])
+        else:
+          acc_audio_data = np.hstack([acc_audio_data, audio_np])
 
-        acc_audio_data = torch.hstack([acc_audio_data, audio_torch])
+        params = {}
+        if self.args.no_faster_whisper and not self.args.no_fp16 and (self.compute_device == "cuda"):
+          params['fp16'] = True
+
+        if self.args.translate:
+          params['task'] = 'translate'
 
         # Read the transcription.
         result = self.audio_model.transcribe(
           acc_audio_data,
-          fp16=not self.args.no_fp16 and (self.compute_device == "cuda"),
           condition_on_previous_text=False,
           language=self.language,
           initial_prompt='\n'.join(transcription[-self.n_context:]),
-          **({'task': 'translate'} if self.args.translate else {}),
+          **params,
         )
+        if not self.args.no_faster_whisper:
+          segments, info = result
+          result = { 'segments': [] }
+          for seg in segments:
+            result['segments'].append({
+              'text': seg.text,
+              'start': seg.start,
+              'end': seg.end,
+            })
+
         texts = list(map(lambda x: x['text'], result['segments']))
 
         if self.args.stablize_turns > 0:
-          if len(texts) == 0 and len(acc_audio_data)/self.sample_rate > self.force_discard:
+          if len(texts) == 0 and len(acc_audio_data)/self.sample_rate > self.args.max_duration:
             cut_off = len(acc_audio_data) - self.min_duration*self.sample_rate
             acc_audio_data = acc_audio_data[cut_off:]
 
@@ -430,7 +458,7 @@ class Transcriber():
             pos += 1
 
           if pos <= 0 and len(texts) > 1:
-            if len(acc_audio_data)/self.sample_rate - result['segments'][0]['end'] > self.force_discard:
+            if len(acc_audio_data)/self.sample_rate - result['segments'][0]['end'] > self.args.max_duration:
               pos = 1
 
           if pos > 0:
