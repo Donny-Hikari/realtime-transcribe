@@ -36,7 +36,7 @@ def parse_args():
   parser.add_argument("--no-fp16", action='store_true', default=False,
             help="Disable fp16.")
 
-  parser.add_argument("--energy_threshold", default=200,
+  parser.add_argument("--energy_threshold", default=500,
             help="Energy level for mic to detect.", type=int)
   parser.add_argument("--record_timeout", default=2,
             help="How real time the recording is in seconds.", type=float)
@@ -75,7 +75,7 @@ class HUD(QMainWindow):
   max_height_percentage = 0.16
   max_lines = 4
   padding = 10
-  extra_padding = 30
+  corner_spacing = 20
 
   def __init__(self, font_size):
     super().__init__()
@@ -106,6 +106,7 @@ class HUD(QMainWindow):
     max_height = int(self.max_height_percentage * screen_geometry.height())
     self.setFixedWidth(max_width)
     self.setFixedHeight(max_height) # sadly qt is unable to measure text height properly, so we have to set height ratio to screen and leave it ugly
+    self.move(screen_geometry.width()-max_width-self.corner_spacing, screen_geometry.height()-max_height-self.corner_spacing)
 
     # Start updating the text periodically
     self.update_text_timer = QTimer(self)
@@ -404,7 +405,7 @@ class Transcriber():
         # Clear the console to reprint the updated transcription.
         os.system('cls' if os.name=='nt' else 'clear')
         for seg in result['segments']:
-          print(seg['start'], '->', seg['end'], seg['text'])
+          print('%.2f' % seg['start'], '->', '%.2f' % seg['end'], seg['text'])
 
         for line in transcription:
           print(line)
