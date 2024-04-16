@@ -29,11 +29,11 @@ def parse_args():
   parser.add_argument("--input-provider", default="pyaudio",
             choices=["pyaudio", "speech-recognition"],
             help="Default input provider.", type=str)
+
   parser.add_argument("--language", default=None,
             help="Default language.", type=str)
-
-  parser.add_argument("--font-size", default=30,
-            help="Font size of HUD.", type=int)
+  parser.add_argument("--translate", action='store_true', default=False,
+            help="Translate to English.")
 
   parser.add_argument("--no-fp16", action='store_true', default=False,
             help="Disable fp16.")
@@ -41,6 +41,9 @@ def parse_args():
             help="Turns to stablize result (before discarding audio record). 0 means never.", type=int)
   parser.add_argument("--keep-transcriptions", action='store_true', default=False,
             help="Keep all previous transcriptions")
+
+  parser.add_argument("--font-size", default=30,
+            help="Font size of HUD.", type=int)
 
   # args for input provider 'speech-recognition'
   parser.add_argument("--energy_threshold", default=500,
@@ -411,6 +414,7 @@ class Transcriber():
           condition_on_previous_text=False,
           language=self.language,
           initial_prompt='\n'.join(transcription[-self.n_context:]),
+          **({'task': 'translate'} if self.args.translate else {}),
         )
         texts = list(map(lambda x: x['text'], result['segments']))
 
