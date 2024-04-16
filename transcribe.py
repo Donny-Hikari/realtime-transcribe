@@ -31,18 +31,29 @@ def parse_args():
             help="Default input provider.", type=str)
   parser.add_argument("--language", default=None,
             help="Default language.", type=str)
-  parser.add_argument("--font-size", default=30, type=int,
-            help="Font size of HUD.")
+
+  parser.add_argument("--font-size", default=30,
+            help="Font size of HUD.", type=int)
+
   parser.add_argument("--no-fp16", action='store_true', default=False,
             help="Disable fp16.")
+  parser.add_argument("--stablize-turns", default=5,
+            help="Turns to stablize result (before discarding audio record). 0 means never.", type=int)
+  parser.add_argument("--keep-transcriptions", action='store_true', default=False,
+            help="Keep all previous transcriptions")
 
+  # args for input provider 'speech-recognition'
   parser.add_argument("--energy_threshold", default=500,
             help="Energy level for mic to detect.", type=int)
-  parser.add_argument("--record_timeout", default=2,
+  parser.add_argument("--record_timeout", default=1,
             help="How real time the recording is in seconds.", type=float)
   parser.add_argument("--phrase_timeout", default=3,
             help="How much empty space between recordings before we "
                "consider it a new line in the transcription.", type=float)
+
+  # args for input provider 'pyaudio'
+  parser.add_argument("--moving-window", default=50,
+            help="Moving window duration in seconds for transription.", type=int)
   args = parser.parse_args()
   return args
 
@@ -227,6 +238,8 @@ class PyAudioProvider(AudioInputProvider):
     self.sample_size = self.audio.get_sample_size(self.audio_format)
     self.audio_chunk = 10240  # Number of frames per buffer
 
+    self.moving_window = args.moving_window
+
     self.device_index = None
     self.stop_event = threading.Event()
 
@@ -251,8 +264,8 @@ class PyAudioProvider(AudioInputProvider):
     self.record_thread.join()
 
   def phrase_cut_off(self, acc_data, new_data):
-    if len(acc_data) + len(new_data) > self.sample_rate*self.sample_size*60:
-      return len(acc_data) // 2
+    if (exceed := len(acc_data) + len(new_data) - self.sample_rate*self.moving_window) > 0:
+      return exceed
     else:
       return 0
 
@@ -280,6 +293,11 @@ class PyAudioProvider(AudioInputProvider):
     stream.close()
 
 class Transcriber():
+  min_duration = 30 # seconds
+  n_context = 5
+  max_transcription_history = 100
+  force_discard = 60 # seconds
+
   def __init__(self, args):
     self.args = args
     self.language = args.language
@@ -356,7 +374,8 @@ class Transcriber():
     self.transribe_thread.join()
 
   def listen(self):
-    transcription = ['']
+    transcription = []
+    last_texts = []
 
     self.input_provider.start_record()
 
@@ -372,8 +391,10 @@ class Transcriber():
           sleep(0.1)
           continue
 
-        phrase_cut_off = self.input_provider.phrase_cut_off(acc_audio_data, audio_data)
-        acc_audio_data = acc_audio_data[phrase_cut_off:]
+        if self.args.stablize_turns <= 0:
+          phrase_cut_off = self.input_provider.phrase_cut_off(acc_audio_data, audio_data)
+          acc_audio_data = acc_audio_data[phrase_cut_off:]
+          print('phrase', phrase_cut_off)
 
         # Convert in-ram buffer to something the model can use directly without needing a temp file.
         # Convert data from 16 bit wide integers to floating point with a width of 32 bits.
@@ -389,30 +410,58 @@ class Transcriber():
           fp16=not self.args.no_fp16 and (self.compute_device == "cuda"),
           condition_on_previous_text=False,
           language=self.language,
+          initial_prompt='\n'.join(transcription[-self.n_context:]),
         )
-        wrapped_text = '\n'.join(map(lambda x: x['text'], result['segments']))
+        texts = list(map(lambda x: x['text'], result['segments']))
 
-        # If we detected a pause between recordings, add a new item to our transcription.
-        # Otherwise edit the existing one.
-        if phrase_cut_off > 0:
-          transcription.append(wrapped_text)
+        if self.args.stablize_turns > 0:
+          if len(texts) == 0 and len(acc_audio_data)/self.sample_rate > self.force_discard:
+            cut_off = len(acc_audio_data) - self.min_duration*self.sample_rate
+            acc_audio_data = acc_audio_data[cut_off:]
+
+          pos = 0
+          while pos < min(len(last_texts), len(texts))-self.args.stablize_turns:
+            if last_texts[pos] != texts[pos]:
+              break
+            pos += 1
+
+          if pos <= 0 and len(texts) > 1:
+            if len(acc_audio_data)/self.sample_rate - result['segments'][0]['end'] > self.force_discard:
+              pos = 1
+
+          if pos > 0:
+            seg = result['segments'][pos-1]
+            cut_off = int(seg['end']*self.sample_rate)
+            cut_off = min(cut_off, len(acc_audio_data)-self.min_duration*self.sample_rate)
+            cut_off = max(0, cut_off)
+            acc_audio_data = acc_audio_data[cut_off:]
+            texts = texts[pos:]
+
+            transcription += last_texts[:pos]
         else:
-          transcription[-1] = wrapped_text
+          if phrase_cut_off > 0:
+            transcription += last_texts
+
+        if not self.args.keep_transcriptions:
+          transcription = transcription[-self.max_transcription_history:]
+
+        last_texts = texts
 
         if self.hud_window is not None:
-          self.hud_window.update_text(wrapped_text)
+          self.hud_window.update_text('\n'.join(texts))
 
         # Clear the console to reprint the updated transcription.
         os.system('cls' if os.name=='nt' else 'clear')
-        for seg in result['segments']:
-          print('%.2f' % seg['start'], '->', '%.2f' % seg['end'], seg['text'])
-
         for line in transcription:
           print(line)
+        for seg in result['segments']:
+          print('%.2f' % seg['start'], '->', '%.2f' % seg['end'], seg['text'])
         # Flush stdout.
         print('', end='', flush=True)
       except KeyboardInterrupt as e:
         break
+
+    transcription += last_texts
 
     print("\n\nTranscription:")
     for line in transcription:
