@@ -9,6 +9,7 @@ import whisper
 import torch
 import threading
 import pyaudio
+import signal
 
 from datetime import datetime, timedelta
 from queue import Queue
@@ -49,7 +50,7 @@ class HUD(QMainWindow):
   max_width_percentage = 0.4
   max_lines = 4
   padding = 10
-  stupid_qt = 20
+  extra_padding = 30
 
   def __init__(self, font_size):
     super().__init__()
@@ -88,7 +89,7 @@ class HUD(QMainWindow):
 
     # Start updating the text periodically
     self.update_text_timer = QTimer(self)
-    self.update_text_timer.timeout.connect(self.update_text)
+    self.update_text_timer.timeout.connect(self.updateTextWidget)
     self.update_text_timer.start(100)  # Update text every 100 milliseconds
 
     # Variables for dragging the window
@@ -108,17 +109,20 @@ class HUD(QMainWindow):
     if event.button() == Qt.LeftButton:
       self.old_pos = None
 
-  def update_text(self):
+  def updateTextWidget(self):
     self.label.setText(self.text)
 
     # Set label maximum height to show only last 3 lines wrapped
     fm = self.label.fontMetrics()
     label_rect = fm.boundingRect(QRect(0, 0, self.max_width-self.padding*2, 1000), Qt.TextWordWrap|Qt.AlignLeft|Qt.AlignVCenter, self.text)
     last_3_lines_height = self.max_lines * fm.lineSpacing()
-    max_label_height = min(label_rect.height(), last_3_lines_height) + self.padding*2 + self.stupid_qt
+    max_label_height = min(label_rect.height(), last_3_lines_height) + self.padding*2 + self.extra_padding
     self.setFixedHeight(max_label_height)
     self.label.resize(QSize(label_rect.width(), label_rect.height()))
     self.label.move(0, max_label_height - label_rect.height())
+
+  def update_text(self, text):
+    self.text = text
 
 
 class AudioInputProvider:
@@ -138,8 +142,8 @@ class AudioInputProvider:
     raise NotImplementedError
 
 class SpeechRecognitionAudioProvider(AudioInputProvider):
-  def __init__(self, args, data_queue):
-    self.sample_rate = 44100
+  def __init__(self, args, data_queue, sample_rate):
+    self.sample_rate = sample_rate
     self.energy_threshold = args.energy_threshold
     self.record_timeout = args.record_timeout
     self.phrase_timeout = args.phrase_timeout
@@ -199,14 +203,14 @@ class SpeechRecognitionAudioProvider(AudioInputProvider):
     self.data_queue.put(data)
 
 class PyAudioProvider(AudioInputProvider):
-  def __init__(self, args, data_queue):
+  def __init__(self, args, data_queue, sample_rate):
     self.audio = pyaudio.PyAudio()
 
     self.audio_format = pyaudio.paInt16  # Format of the audio samples
     self.audio_channels = 1  # Number of audio channels (1 for mono, 2 for stereo)
-    self.sample_rate = 44100  # Sample rate (samples per second)
+    self.sample_rate = sample_rate  # Sample rate (samples per second)
     self.sample_size = self.audio.get_sample_size(self.audio_format)
-    self.audio_chunk = 1024  # Number of frames per buffer
+    self.audio_chunk = 10240  # Number of frames per buffer
 
     self.device_index = None
     self.stop_event = threading.Event()
@@ -238,6 +242,10 @@ class PyAudioProvider(AudioInputProvider):
       return 0
 
   def _record_audio(self):
+    def stream_callback(in_data, frame_count, time_info, status):
+        self.data_queue.put(in_data)
+        return (None, pyaudio.paContinue)
+
     # Open audio stream with the selected input device
     stream = self.audio.open(
       format=self.audio_format,
@@ -246,11 +254,11 @@ class PyAudioProvider(AudioInputProvider):
       input=True,
       input_device_index=self.device_index,
       frames_per_buffer=self.audio_chunk,
+      stream_callback=stream_callback,
     )
 
-    while not self.stop_event.is_set():
-      data = stream.read(self.audio_chunk, exception_on_overflow=False)
-      self.data_queue.put(data)
+    while not self.stop_event.is_set() and stream.is_active():
+      sleep(0.1)
 
     # Close the audio stream
     stream.stop_stream()
@@ -260,7 +268,7 @@ class Transcriber():
   def __init__(self, args):
     self.args = args
     self.language = args.language
-    self.sample_rate = 44100
+    self.sample_rate = whisper.audio.SAMPLE_RATE
     # The last time a recording was retrieved from the queue.
     self.compute_device = "cuda" if torch.cuda.is_available() else "cpu"
     self.model_name = args.model
@@ -272,9 +280,9 @@ class Transcriber():
     self.hud_window = None
 
     if args.input_provider == "speech-recognition":
-      self.input_provider = SpeechRecognitionAudioProvider(args=self.args, data_queue=self.data_queue)
+      self.input_provider = SpeechRecognitionAudioProvider(args=self.args, data_queue=self.data_queue, sample_rate=self.sample_rate)
     elif args.input_provider == "pyaudio":
-      self.input_provider = PyAudioProvider(args=self.args, data_queue=self.data_queue)
+      self.input_provider = PyAudioProvider(args=self.args, data_queue=self.data_queue, sample_rate=self.sample_rate)
 
     self.init_input_device(args)
 
@@ -309,6 +317,11 @@ class Transcriber():
 
   def display_hud(self):
     app = QApplication([])
+
+    def handle_signal(sig, frame):
+      app.quit()
+    signal.signal(signal.SIGINT, handle_signal)
+
     self.hud_window = HUD(font_size=self.args.font_size)
     self.hud_window.show()
     app.exec()
@@ -371,7 +384,8 @@ class Transcriber():
         else:
           transcription[-1] = text
 
-        self.hud_window.text = '\n'.join(transcription[-2:])
+        if self.hud_window is not None:
+          self.hud_window.update_text('\n'.join(transcription[-2:]))
 
         # Clear the console to reprint the updated transcription.
         os.system('cls' if os.name=='nt' else 'clear')
