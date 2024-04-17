@@ -1,0 +1,7 @@
+openai-whisper
+SpeechRecognition
+pyaudio
+faster_whisper
+torch
+PyQt5
+sounddevice
