@@ -2,6 +2,8 @@
 
 Transcribe your speech or the audio playing on your computer with Whisper in realtime, and show the captions on your screen.
 
+https://github.com/Donny-Hikari/realtime-transcribe/assets/22200374/082a7b41-ace2-428b-a886-9c526d95aa44
+
 ## Installation
 
 Install the following packages:
