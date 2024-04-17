@@ -1,6 +1,6 @@
 # Realtime onscreen transcription with Whisper
 
-Transcribe your speech or the audio playing on your computer with Whisper.
+Transcribe your speech or the audio playing on your computer with Whisper, and show the captions on your screen.
 
 ## Installation
 
@@ -12,7 +12,25 @@ $ pip install -r requirement.txt
 
 ## Usage
 
-1. (Optional) For transcribing the audio on your computer, setup a loopback device for your computer. Skip this step if you are going to transcribe your speech or if you already setup a monitor device in other way.
+### Transcribe your speech
+
+Run the following command to start transcribing your speech:
+
+```shell
+$ python transcribe.py --input-provider speech-recognition --model base --no-faster-whisper
+```
+
+You can choose the input provider from "speech-recognition" and "pyaudio". The difference is speech-recognition will surpress silence input.
+
+To run with faster whisper, omit the `--no-faster-whisper` option. Note for Cuda 12.x, you need to update your `LD_LIBRARY_PATH`, see [Troubleshoot - 1](#troubleshoot-1).
+
+For better percision, use the `--language` option to specify the input language (in [ISO 639-1 codes](https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes)).
+
+### Transcribe the audio output on your computer
+
+1. (Optional) Setup monitor device for audio output.
+
+    Setup a loopback device for your audio output. Skip this step if you already setup a monitor device in other way.
 
     First list available devices for monitoring (this will also list your microphone).
 
@@ -32,25 +50,13 @@ $ pip install -r requirement.txt
     $ export PULSE_SOURCE=alsa_output.hdmi-stereo.monitor
     ```
 
-2. Launch the transcribe application.
+2. Start transcribing.
 
-    For transcribing the audio on your computer from device chosen in step 1, use "pulse" as input.
-
-    You can choose the input provider from "speech-recognition" and "pyaudio". The difference is speech-recognition will surpress silence input.
+    For transcribing from the device chosen in step 1, use "pulse" as input.
 
     ```shell
     $ python transcribe.py --input pulse --input-provider speech-recognition --model base --no-faster-whisper
     ```
-
-    For transcribing your speech, use your microphone as input. You can run the following command to choose from available devices.
-
-    ```shell
-    $ python transcribe.py --input-provider speech-recognition --model base --no-faster-whisper
-    ```
-
-    To run with faster whisper, omit the `--no-faster-whisper` option. Note for Cuda 12.x, you need to update your `LD_LIBRARY_PATH`, see [Troubleshoot - 1](#troubleshoot-1).
-
-    For better percision, use the `--language` option to specify the input language (in [ISO 639-1 codes](https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes)).
 
 ## Troubleshoot
 
