@@ -42,6 +42,8 @@ def parse_args():
             help="Disable fp16.")
   parser.add_argument("--stablize-turns", default=5,
             help="Turns to stablize result (before discarding audio record). 0 means never.", type=int)
+  parser.add_argument("--min-duration", default=30,
+            help="Min duration of audio record to keep.", type=int)
   parser.add_argument("--max-duration", default=60,
             help="Max duration of audio record to keep.", type=int)
   parser.add_argument("--keep-transcriptions", action='store_true', default=False,
@@ -301,7 +303,6 @@ class PyAudioProvider(AudioInputProvider):
     stream.close()
 
 class Transcriber():
-  min_duration = 30 # seconds
   n_context = 5
   max_transcription_history = 100
 
@@ -384,12 +385,14 @@ class Transcriber():
     self.transribe_thread.join()
 
   def listen(self):
+    args = self.args
+
     transcription = []
     last_texts = []
 
     self.input_provider.start_record()
 
-    if self.args.no_faster_whisper:
+    if args.no_faster_whisper:
       acc_audio_data = torch.zeros((0,), dtype=torch.float32, device=self.compute_device)
     else:
       acc_audio_data = np.zeros((0,), dtype=np.float32)
@@ -404,7 +407,7 @@ class Transcriber():
           sleep(0.1)
           continue
 
-        if self.args.stablize_turns <= 0:
+        if args.stablize_turns <= 0:
           phrase_cut_off = self.input_provider.phrase_cut_off(acc_audio_data, audio_data)
           acc_audio_data = acc_audio_data[phrase_cut_off:]
           print('phrase', phrase_cut_off)
@@ -413,17 +416,17 @@ class Transcriber():
         # Convert data from 16 bit wide integers to floating point with a width of 32 bits.
         # Clamp the audio stream frequency to a PCM wavelength compatible default of 32768hz max.
         audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-        if self.args.no_faster_whisper:
+        if args.no_faster_whisper:
           audio_torch = torch.from_numpy(audio_np).to(device=self.compute_device)
           acc_audio_data = torch.hstack([acc_audio_data, audio_torch])
         else:
           acc_audio_data = np.hstack([acc_audio_data, audio_np])
 
         params = {}
-        if self.args.no_faster_whisper and not self.args.no_fp16 and (self.compute_device == "cuda"):
+        if args.no_faster_whisper and not args.no_fp16 and (self.compute_device == "cuda"):
           params['fp16'] = True
 
-        if self.args.translate:
+        if args.translate:
           params['task'] = 'translate'
 
         # Read the transcription.
@@ -434,7 +437,7 @@ class Transcriber():
           initial_prompt='\n'.join(transcription[-self.n_context:]),
           **params,
         )
-        if not self.args.no_faster_whisper:
+        if not args.no_faster_whisper:
           segments, info = result
           result = { 'segments': [] }
           for seg in segments:
@@ -446,25 +449,26 @@ class Transcriber():
 
         texts = list(map(lambda x: x['text'], result['segments']))
 
-        if self.args.stablize_turns > 0:
-          if len(texts) == 0 and len(acc_audio_data)/self.sample_rate > self.args.max_duration:
-            cut_off = len(acc_audio_data) - self.min_duration*self.sample_rate
+        if args.stablize_turns > 0:
+          if len(texts) == 0 and len(acc_audio_data)/self.sample_rate > args.max_duration:
+            cut_off = len(acc_audio_data) - args.min_duration*self.sample_rate
             acc_audio_data = acc_audio_data[cut_off:]
 
           pos = 0
-          while pos < min(len(last_texts), len(texts))-self.args.stablize_turns:
+          while pos < min(len(last_texts), len(texts))-args.stablize_turns:
             if last_texts[pos] != texts[pos]:
               break
             pos += 1
 
           if pos <= 0 and len(texts) > 1:
-            if len(acc_audio_data)/self.sample_rate - result['segments'][0]['end'] > self.args.max_duration:
-              pos = 1
+            pos = 0
+            while len(acc_audio_data)/self.sample_rate - result['segments'][pos]['end'] > args.max_duration:
+              pos += 1
 
           if pos > 0:
             seg = result['segments'][pos-1]
             cut_off = int(seg['end']*self.sample_rate)
-            cut_off = min(cut_off, len(acc_audio_data)-self.min_duration*self.sample_rate)
+            cut_off = min(cut_off, len(acc_audio_data)-args.min_duration*self.sample_rate)
             cut_off = max(0, cut_off)
             acc_audio_data = acc_audio_data[cut_off:]
             texts = texts[pos:]
@@ -474,7 +478,7 @@ class Transcriber():
           if phrase_cut_off > 0:
             transcription += last_texts
 
-        if not self.args.keep_transcriptions:
+        if not args.keep_transcriptions:
           transcription = transcription[-self.max_transcription_history:]
 
         last_texts = texts
