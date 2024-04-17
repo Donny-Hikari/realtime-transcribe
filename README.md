@@ -1,6 +1,6 @@
 # Realtime onscreen transcription with Whisper
 
-Transcribe your speech or the audio playing on your computer with Whisper, and show the captions on your screen.
+Transcribe your speech or the audio playing on your computer with Whisper in realtime, and show the captions on your screen.
 
 ## Installation
 
@@ -20,11 +20,15 @@ Run the following command to start transcribing your speech:
 $ python transcribe.py --input-provider speech-recognition --model base --no-faster-whisper
 ```
 
-You can choose the input provider from "speech-recognition" and "pyaudio". The difference is speech-recognition will surpress silence input.
+A list of audio input device will be displayed. Choose your microphone to start transcribing.
 
-To run with faster whisper, omit the `--no-faster-whisper` option. Note for Cuda 12.x, you need to update your `LD_LIBRARY_PATH`, see [Troubleshoot - 1](#troubleshoot-1).
+Some options:
 
-For better percision, use the `--language` option to specify the input language (in [ISO 639-1 codes](https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes)).
+1. You can choose the `--input-provider` from "speech-recognition" and "pyaudio". The difference is speech-recognition will surpress silence input.
+
+2. To run with faster whisper, omit the `--no-faster-whisper` option. Note for Cuda 12.x, you need to update your `LD_LIBRARY_PATH`, see [Troubleshoot - 1](#troubleshoot-1).
+
+3. For better percision, use the `--language` option to specify the input language (in [ISO 639-1 codes](https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes)).
 
 ### Transcribe the audio output on your computer
 
