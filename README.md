@@ -12,36 +12,31 @@ $ pip install -r requirement.txt
 
 ## Usage
 
-1. (Optional) For transcribing the audio on your computer, setup a loopback device for your computer. Skip this step if you already setup a monitor device in other way. Note this script is only tested on Ubuntu 22.04.
+1. (Optional) For transcribing the audio on your computer, setup a loopback device for your computer. Skip this step if you are going to transcribe your speech or if you already setup a monitor device in other way.
 
     First list available devices for monitoring (this will also list your microphone).
 
     ```shell
-    ./input-setup.sh
+    $ pactl list sources short
     ```
 
     Example output:
 
     ```
-    Choose an audio output to monitor:
-    2   alsa_input.microphone   module-alsa-card.c    s16le
-    30   alsa_output.hdmi-stereo.monitor   module-alsa-card.c    s16le
-
-    Usage:
-      input-setup.sh OUTPUT_MONITOR
+    2   alsa_input.microphone   module-alsa-card.c    s16le 1ch 44100Hz   SUSPENDED
+    30   alsa_output.hdmi-stereo.monitor   module-alsa-card.c    s16le 2ch 44100Hz RUNNING
     ```
 
-    Then create loopback device for your chosen device, for example for `alsa_output.hdmi-stereo.monitor`:
-
+    Then set the pulse source to your chosen device, for example "alsa_output.hdmi-stereo.monitor".
     ```shell
-    $ ./input-setup.sh alsa_output.hdmi-stereo.monitor
+    $ export PULSE_SOURCE=alsa_output.hdmi-stereo.monitor
     ```
-
-    Then select the created loopback device "Transcribe-Output-Loopback" as your audio input from your system settings.
 
 2. Launch the transcribe application.
 
-    For transcribing the audio on your computer, use "pulse" as input. You can choose the input provider from speech-recognition and pyaudio. The difference is speech-recognition will surpress silence input.
+    For transcribing the audio on your computer from device chosen in step 1, use "pulse" as input.
+
+    You can choose the input provider from "speech-recognition" and "pyaudio". The difference is speech-recognition will surpress silence input.
 
     ```shell
     $ python transcribe.py --input pulse --input-provider speech-recognition --model base --no-faster-whisper
@@ -54,6 +49,8 @@ $ pip install -r requirement.txt
     ```
 
     To run with faster whisper, omit the `--no-faster-whisper` option. Note for Cuda 12.x, you need to update your `LD_LIBRARY_PATH`, see [Troubleshoot - 1](#troubleshoot-1).
+
+    For better percision, use the `--language` option to specify the input language (in [ISO 639-1 codes](https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes)).
 
 ## Troubleshoot
 
